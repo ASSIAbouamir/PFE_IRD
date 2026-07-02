@@ -1142,4 +1142,4 @@ if __name__ == '__main__':
     print("Port d'écoute : http://127.0.0.1:5000")
     print("Utilisez avocat/avocat ou admin/admin pour vous connecter.")
     print("==================================================\n")
-    app.run(host='127.0.0.1', port=5000, debug=True)
+    app.run(host='127.0.0.1', port=5000, debug=True, use_reloader=False)

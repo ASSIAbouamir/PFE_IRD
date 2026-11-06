@@ -15,9 +15,40 @@ Ce projet implémente l'architecture de **RAG Avancé Multi-Graph & Multi-Agent*
 
 Il combine :
 - **3 graphes de connaissances** : graphe lexical (hiérarchie des lois), graphe de citations (renvois entre articles), graphe des définitions (glossaire juridique).
-- **Un moteur de recherche hybride** : BM25 + Dense (BGE-M3) + Graph, avec fusion dynamique des scores.
-- **Un pipeline multi-agents LangGraph** orchestrant 6 agents spécialisés.
+- **Un moteur de recherche hybride** : BM25 (0.50) + Dense BGE-M3 (0.35) + Graphe (0.15), avec traversée récursive et reranking.
+- **Un pipeline multi-agents LangGraph** orchestrant 5 agents spécialisés.
 - **Un pipeline d'ingestion autonome** : veille législative, détection de conflits, déduplication temporelle.
+
+> 📄 Ce travail a été présenté à **LaTeLL 2026** (*Language Technologies for Low-resource Languages*, Fès) :  
+> **« Beyond RAG: A Multi-Graph, Multi-Agent, Recursive Retrieval Architecture for Traceable and Source-Grounded Legal Answers »**  
+> Assia Bouamir, Marie Bonnin, Youssef Al Mouatamid, Jihad Zahir — LISI, Université Cadi Ayyad · IRD / LEMAR, Univ Brest · UMMISCO-IRD
+
+---
+
+## 📊 Résultats
+
+Évaluation sur un benchmark de **263 paires question-réponse validées par des experts** (accord inter-annotateurs κ = 0.79), comparée à un RAG classique.
+
+| Métrique | RAG classique | Multi-Agent (ce projet) |
+|---|---|---|
+| **Exactitude des citations** (loi + n° d'article corrects) | 25.9 % (68/263) | **93.9 % (247/263)** |
+| **BERTScore F1** (vs. réponses expertes) | 0.378 | **0.845** |
+
+L'exactitude des citations est confirmée par une évaluation humaine indépendante (κ = 0.81, 60 questions, 2 annotateurs experts).
+
+**Métriques RAGAS par thème**
+
+| Métrique | Baseline (Baleine) | Multi-Agent (Baleine) | Baseline (Hydrocarbures) | Multi-Agent (Hydrocarbures) |
+|---|---|---|---|---|
+| Faithfulness | 0.41 | **0.83** | 0.39 | **0.88** |
+| Answer Relevancy | 0.51 | **0.84** | 0.48 | **0.87** |
+| Context Recall | 0.22 | **0.86** | 0.19 | **0.89** |
+| Answer Correctness | 0.14 | **0.78** | 0.12 | **0.90** |
+
+**Étude d'ablation (Chasse à la baleine)** — les graphes et les agents ont un effet super-additif :
+sans graphes → BERTScore 0.559 · sans agents → 0.579 · système complet → **0.882**.
+
+**Erreurs résiduelles identifiées** : précédence temporelle (loi ancienne citée au lieu d'une loi révisée, non résolue), contamination juridictionnelle (atténuée par filtrage des métadonnées), exceptions implicites (atténuées par un prompt à contrainte négative).
 
 ---
 
@@ -34,7 +65,7 @@ PFE_IRD/
 ├── 📄 .env.example           ← Modèle de configuration (variables d'environnement)
 │
 ├── 📁 legal_rag/             ← ⭐ Module principal RAG Multi-Graphes
-│   ├── agents.py             ← Définition des 6 agents LangGraph
+│   ├── agents.py             ← Définition des 5 agents LangGraph
 │   ├── graph_builder.py      ← Construction des graphes (lexical, citations, défis)
 │   ├── retrieval_system.py   ← Moteur de recherche hybride + reranker
 │   ├── main_data_integration.py ← Intégration et routage global multi-documents
@@ -137,7 +168,7 @@ cp .env.example .env
 python server.py
 ```
 
-Le serveur démarre sur **`http://127.0.0.1:5000`** et connecte automatiquement le moteur RAG (48 documents indexés).
+Le serveur démarre sur **`http://127.0.0.1:5000`** et connecte automatiquement le moteur RAG au corpus indexé.
 
 > [!NOTE]
 > **Problème résolu :** Nous avons ajouté `use_reloader=False` pour empêcher le serveur Flask de redémarrer au milieu d'une requête RAG lorsque PyTorch charge ses fichiers de cache dynamiques. Sans ce correctif, le serveur coupe la connexion HTTP avec l'erreur `ConnectionResetError(10054)`.
@@ -148,11 +179,10 @@ Le serveur démarre sur **`http://127.0.0.1:5000`** et connecte automatiquement 
 
 Ouvrez votre navigateur sur **`http://127.0.0.1:5000`**
 
-**Identifiants de connexion :**
-| Rôle | Login | Mot de passe |
-|---|---|---|
-| 🧑‍⚖️ Avocat / Expert | `avocat` | `avocat` |
-| ⚙️ Administrateur | `admin` | `admin` |
+**Connexion :** deux rôles sont disponibles (🧑‍⚖️ Avocat / Expert et ⚙️ Administrateur). Les comptes de démonstration sont créés au premier lancement dans `server.py`.
+
+> [!WARNING]
+> Ces comptes de démonstration servent uniquement en local. Modifiez leurs mots de passe avant tout déploiement.
 
 ---
 
@@ -165,7 +195,7 @@ Une fois connecté, naviguez vers l'onglet **💬 Chatbot RAG** :
    - `Recursive Retrieval Agent` — requête générale multi-documents
    - `Recherche` — Requête rapide avec routing automatique
 3. **Saisir votre question juridique** dans la zone de texte.
-4. **Observer le pipeline multi-agents** s'exécuter visuellement (6 étapes animées).
+4. **Observer le pipeline multi-agents** s'exécuter visuellement (recherche initiale puis 5 agents).
 
 **Exemple de questions :**
 ```
@@ -282,30 +312,31 @@ git push origin main
 
 ---
 
-## 🤖 Description des 6 Agents LangGraph
+## 🤖 Description des 5 Agents LangGraph
+
+Après une recherche hybride initiale, 5 agents spécialisés enrichissent le contexte jusqu'à ce qu'il soit complet (3 itérations au maximum).
 
 | Agent | Rôle |
 |---|---|
-| ⚖️ **Supervisor Agent (Évaluation)** | Évalue l'état initial du dossier, décide de l'agent à activer en premier |
-| 💡 **Definition Agent** | Détecte les termes juridiques ambigus et les enrichit depuis le graphe des définitions |
-| 🎯 **Reference Detector Agent** | Identifie les renvois explicites (`voir article X`, `conformément à la loi Y`) |
-| 🔗 **Cross-Reference Resolution Agent** | Résout les citations, récupère les clauses référencées dans d'autres documents |
-| 🔄 **Supervisor Agent (Complétude)** | Réévalue la complétude du contexte, décide si une itération supplémentaire est nécessaire |
-| 📝 **Answering Agent** | Génère la réponse finale formatée avec traçabilité complète des sources |
+| ⚖️ **Supervisor Agent** | Évalue l'état du dossier, choisit l'agent à activer, vérifie la complétude du contexte et décide d'une nouvelle itération (3 au maximum) |
+| 💡 **Definition Agent** | Injecte les définitions légales officielles des termes juridiques non résolus, depuis le graphe des définitions |
+| 🎯 **Reference Detector Agent** | Détecte les renvois explicites dans les clauses récupérées (`voir article X`, `conformément à la loi Y`) |
+| 🔗 **Cross-Reference Resolution Agent** | Résout les renvois via le graphe de citations et récupère les clauses citées ; relance un cycle si de nouvelles références apparaissent |
+| 📝 **Answering Agent** | Rédige la réponse finale avec une section « Sources consultées » obligatoire |
 
 ---
 
 ## 🗂️ Thèmes et Pays Couverts
 
-Le système RAG couvre **48 documents** répartis sur **5 thèmes juridiques** :
+Corpus de droit africain francophone : **50 PDF uniques**, **17 juridictions**, **7 943 DocumentNodes** (clauses qualifiées). Ce corpus multi-juridictionnel de droit civil n'est pas couvert par les benchmarks existants (LegalBench, CLERC).
 
-| Thème | Description |
-|---|---|
-| 🐋 **Baleine** | Réglementation sur la protection des cétacés et mammifères marins |
-| 🛢️ **Rejet hydrocarbure** | Législation sur les rejets pétroliers dans les eaux maritimes |
-| 🦅 **Oiseaux marins** | Protection des espèces aviaires marines |
-| ⚓ **TBT (Antifouling)** | Réglementation des peintures antifouling aux tributylétain |
-| 📋 **General** | Textes généraux du droit maritime et environnemental |
+| Thème | Documents | Clauses | Paires Q/R du benchmark |
+|---|---|---|---|
+| 🐋 **Chasse à la baleine** | 23 | 2 080 | 131 |
+| 🦅 **Oiseaux marins** | 14 | 957 | — (corpus seulement) |
+| 🛢️ **Rejets d'hydrocarbures** | 21 | 4 906 | 132 |
+
+L'interface prend également en charge les thèmes **TBT (antifouling)** et **Général** (textes généraux du droit maritime et environnemental).
 
 ---
 
